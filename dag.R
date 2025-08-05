@@ -9,7 +9,7 @@ library(MKdescr)
 library(caret)
 
 # Load data
-dataset <- read.csv("D:/data_DAG.csv")
+dataset <- read.csv("D:/clases/UDES/fortalecimiento institucional/macroproyecto_2023/articulo2/leptos/ci/data_DAG.csv")
 dataset <- select(dataset, excess, S3, S4, S34, S12, ESOI, SOI, 
                   NATL, SATL, TROP, MPI, sro, stl1, swvl1, t2m, tp, 
                   pop_density, NeutralvsLa_Nina)
@@ -37,7 +37,7 @@ dataset$pop_density <- zscore(dataset$pop_density, na.rm = TRUE)
 dataset <- dataset[complete.cases(dataset), ]
 str(dataset)
 
-# DAG
+# DAG 
 dag <- dagitty('dag {
 excess [pos="1, 0.5"]
 NeutralvsLa_Nina [pos="-1, 0.5"]
@@ -81,13 +81,11 @@ S12 -> swvl1 S3 -> swvl1 S34 -> swvl1 S4 -> swvl1 SOI -> swvl1 ESOI -> swvl1 NAT
 S12 -> t2m S3 -> t2m S34 -> t2m S4 -> t2m SOI -> t2m ESOI -> t2m NATL -> t2m SATL -> t2m TROP -> t2m
 S12 -> tp S3 -> tp S34 -> tp S4 -> tp SOI -> tp ESOI -> tp NATL -> tp SATL -> tp TROP -> tp
 
-
 NeutralvsLa_Nina -> sro NeutralvsLa_Nina -> stl1 NeutralvsLa_Nina -> swvl1 NeutralvsLa_Nina -> t2m NeutralvsLa_Nina -> tp NeutralvsLa_Nina -> excess
 
 sro -> MPI stl1 -> MPI swvl1 -> MPI t2m -> MPI tp -> MPI
 sro -> excess stl1 -> excess swvl1 -> excess t2m -> excess tp -> excess
 sro -> pop_density stl1 -> pop_density swvl1 -> pop_density t2m -> pop_density tp -> pop_density
-
 
 sro -> stl1 sro -> swvl1 sro -> t2m sro -> tp
 stl1 -> swvl1 stl1 -> t2m stl1 -> tp
@@ -101,34 +99,34 @@ pop_density -> excess
 # Plot DAG
 plot(dag)
 
-# Covariance matrix
+# Covarince matrix
 myCov <- cov(dataset)
 round(myCov, 2)
 
-# Colineality
+# Test colineality
 myCor <- cov2cor(myCov)
 noDiag <- myCor
 diag(noDiag) <- 0
-any(noDiag == 1)  
+any(noDiag == 1) 
 
-# Multicolineality
+# Test multicolineality
 det(myCov) < 0
 any(eigen(myCov)$values < 0)
 
-# Conditional independeces
+# Conditional independencies
 impliedConditionalIndependencies(dag)
 corr <- lavCor(dataset)
 
-# LocalTests
+# LocalTests 
 localTests(dag, sample.cov = myCov, sample.nobs = nrow(dataset))
 
-# Plot 
+# Plot
 plotLocalTestResults(localTests(dag, sample.cov=corr, sample.nobs=nrow(dataset)), xlim=c(-1,1))
 
 
 # Identification
 simple_dag <- dagify(
-  excess ~  NeutralvsLaNina + S12 + S3 + S34 + S4 + SOI + ESOI + NATL + SATL + TROP + sro + stl1 + swvl1 + t2m + tp + MPI + pop_density,
+  excess ~  NeutralvsLaNina + S12 + S3 + S34 + S4 + SOI + ESOI + NATL + SATL + TROP + sro + stl1 + swvl1 + t2m + tp + MPI + pop_density + DANE + DANE_year + DANE_period,
   NeutralvsLaNina ~ S12 + S3 + S34 + S4 + SOI + ESOI + NATL + SATL + TROP,
   S12 ~ S3 + S34 + S4 + SOI + ESOI + NATL + SATL + TROP,
   S3 ~ S34 + S4 + SOI + ESOI + NATL + SATL + TROP,
@@ -150,13 +148,14 @@ simple_dag <- dagify(
   pop_density ~ MPI + sro + stl1 + swvl1 + t2m + tp,
   exposure = "NeutralvsLaNina",
   outcome = "excess",
-  coords = list(x = c(excess=1, NeutralvsLaNina=-1, ESOI=-1.6, SOI=-1.7, S3=-1.8, S4=-1.9, S34=-2, NATL=-2.1, TROP=-2.2, S12=-2.3, SATL=-2.4,
+  coords = list(x = c(excess=1.5, NeutralvsLaNina=-1, ESOI=-1.6, SOI=-1.7, S3=-1.8, S4=-1.9, S34=-2, NATL=-2.1, TROP=-2.2, S12=-2.3, SATL=-2.4,
                       sro=-1.0, stl1=-0.9, swvl1=-0.8, t2m=-0.7, tp=-0.6,
-                      MPI=0.5, pop_density=0.5),
+                      MPI=0.5, pop_density=0.5, DANE=1.1, DANE_year=1.2, DANE_period=1.3),
                 y = c(excess=0.5, NeutralvsLaNina=0.5, ESOI=1.0, SOI=1.1, S3=1.2, S4=1.3, S34=1.4, NATL=1.5, TROP=1.6, S12=1.7, SATL=1.8,
                       sro=-2.5, stl1=-2.4, swvl1=-2.3, t2m=-2.2, tp=-2.1,
-                      MPI=-1.25, pop_density=1.25))
+                      MPI=-1.25, pop_density=1.25, DANE=1.2, DANE_year=1.3, DANE_period=1.4))
 )
+
 
 ggdag(simple_dag) + 
   theme_dag()
@@ -164,10 +163,10 @@ ggdag(simple_dag) +
 ggdag_status(simple_dag) +
   theme_dag()
 
-# Adjusting
-adjustmentSets(simple_dag,  type = "minimal")
+# Adjust
+adjustmentSets(simple_dag,  type = "canonical")
 
-ggdag_adjustment_set(simple_dag, shadow = TRUE) +
+ggdag_adjustment_set(simple_dag, type = "canonical", shadow = TRUE) +
   theme_dag()
 
 
