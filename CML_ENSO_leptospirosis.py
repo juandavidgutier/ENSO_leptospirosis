@@ -302,10 +302,29 @@ plt.tight_layout()
 plt.title('Average Treatment Effects')
 plt.show()
 
-# Show CATE plots (only for models that were calculated successfully)
-print("\nShowing CATE plots:")
-for i, cate_plot in enumerate(cate_plots):
-    if cate_plot is not None:
-        print(f"Showing CATE for treatment {i+1}:")
-        cate_plot.draw()
-        plt.show()
+# Show CATE plots for all three treatments
+print("\n=== CATE PLOTS ===")
+
+# CATE 1: Neutral vs La Niña
+if cate_plots[0] is not None:
+    print("1. CATE - Neutral vs La Niña:")
+    cate_plots[0].draw()
+    plt.show()
+else:
+    print("1. CATE - Neutral vs La Niña: Not available")
+
+# CATE 2: Neutral vs El Niño  
+if cate_plots[1] is not None:
+    print("2. CATE - Neutral vs El Niño:")
+    cate_plots[1].draw()
+    plt.show()
+else:
+    print("2. CATE - Neutral vs El Niño: Not available")
+
+# CATE 3: El Niño vs La Niña
+if cate_plots[2] is not None:
+    print("3. CATE - El Niño vs La Niña:")
+    cate_plots[2].draw()
+    plt.show()
+else:
+    print("3. CATE - El Niño vs La Niña: Not available")
