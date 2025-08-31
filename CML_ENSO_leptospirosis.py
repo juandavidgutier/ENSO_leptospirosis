@@ -214,19 +214,19 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
     print(f"\n=== Refutation tests for {treatment_name} ===")
     try:
         # Random common cause
-        random_test = estimate_model.refute_estimate(method_name="random_common_cause", random_state=123, num_simulations=10)
+        random_test = estimate_model.refute_estimate(method_name="random_common_cause", random_state=123, num_simulations=50)
         print(f"Random common cause: {random_test}")
         
         # Bootstrap
-        bootstrap_test = estimate_model.refute_estimate(method_name="bootstrap_refuter", random_state=123, num_simulations=10)
+        bootstrap_test = estimate_model.refute_estimate(method_name="bootstrap_refuter", random_state=123, num_simulations=50)
         print(f"Bootstrap: {bootstrap_test}")
         
         # Dummy outcome
-        dummy_test = estimate_model.refute_estimate(method_name="dummy_outcome_refuter", random_state=123, num_simulations=10)
+        dummy_test = estimate_model.refute_estimate(method_name="dummy_outcome_refuter", random_state=123, num_simulations=50)
         print(f"Dummy outcome: {dummy_test[0]}")
         
         # Placebo
-        placebo_test = estimate_model.refute_estimate(method_name="placebo_treatment_refuter", placebo_type="permute", random_state=123, num_simulations=10)
+        placebo_test = estimate_model.refute_estimate(method_name="placebo_treatment_refuter", placebo_type="permute", random_state=123, num_simulations=50)
         print(f"Placebo: {placebo_test}")
     except Exception as e:
         print(f"Error in refutation tests: {e}")
