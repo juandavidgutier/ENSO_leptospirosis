@@ -118,8 +118,7 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
     print(f"Dimensions - Y: {Y.shape}, T: {T.shape}, W: {W.shape}, X: {X.shape}")
 
     # Split data
-    X_train, X_test, T_train, T_test, Y_train, Y_test, W_train, W_test = train_test_split(
-        X, T, Y, W, test_size=0.2, random_state=999)
+    X_train, X_test, T_train, T_test, Y_train, Y_test, W_train, W_test = train_test_split(X, T, Y, W, test_size=0.2, random_state=999, stratify=T)
 
     # Calculate propensity scores and overlap weights
     logit_model = LogisticRegressionCV(
@@ -129,6 +128,7 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
     logit_model.fit(W_train, T_train)
     propensity_scores_train = logit_model.predict_proba(W_train)[:, 1]
     overlap_weights_train = T_train * (1 - propensity_scores_train) + (1 - T_train) * propensity_scores_train
+    overlap_weights_train = np.clip(overlap_weights_train, 0.01, 100)
 
     # Estimation of the effect
     estimate_model = SparseLinearDRLearner(
@@ -214,19 +214,19 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
     print(f"\n=== Refutation tests for {treatment_name} ===")
     try:
         # Random common cause
-        random_test = estimate_model.refute_estimate(method_name="random_common_cause", random_state=123, num_simulations=50)
+        random_test = estimate_model.refute_estimate(method_name="random_common_cause", random_state=123, num_simulations=50, sample_weight=overlap_weights_train)
         print(f"Random common cause: {random_test}")
         
         # Bootstrap
-        bootstrap_test = estimate_model.refute_estimate(method_name="bootstrap_refuter", random_state=123, num_simulations=50)
+        bootstrap_test = estimate_model.refute_estimate(method_name="bootstrap_refuter", random_state=123, num_simulations=50, sample_weight=overlap_weights_train)
         print(f"Bootstrap: {bootstrap_test}")
         
         # Dummy outcome
-        dummy_test = estimate_model.refute_estimate(method_name="dummy_outcome_refuter", random_state=123, num_simulations=50)
+        dummy_test = estimate_model.refute_estimate(method_name="dummy_outcome_refuter", random_state=123, num_simulations=50, sample_weight=overlap_weights_train)
         print(f"Dummy outcome: {dummy_test[0]}")
         
         # Placebo
-        placebo_test = estimate_model.refute_estimate(method_name="placebo_treatment_refuter", placebo_type="permute", random_state=123, num_simulations=50)
+        placebo_test = estimate_model.refute_estimate(method_name="placebo_treatment_refuter", placebo_type="permute", random_state=123, num_simulations=50, sample_weight=overlap_weights_train)
         print(f"Placebo: {placebo_test}")
     except Exception as e:
         print(f"Error in refutation tests: {e}")
