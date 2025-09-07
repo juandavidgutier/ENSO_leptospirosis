@@ -12,6 +12,7 @@ from zepid.graphics import EffectMeasurePlot
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import MinMaxScaler
+from dowhy import CausalModel  # <-- Added for causal DAG modeling
 
 # Set seeds for reproducibility
 def seed_everything(seed=999):
@@ -44,7 +45,7 @@ if data.columns.duplicated().any():
     data = data.loc[:, ~data.columns.duplicated()]
 
 data = data[['SST12', 'SST3', 'SST34', 'SST4', 'NATL', 'SATL', 'TROP', 'SOI', 'ESOI',
-             'MP', 'sro', 'stl1', 'swvl1', 't2m', 'tp', 'pop_density', 'excess', 'cases',
+             'MPI', 'sro', 'stl1', 'swvl1', 't2m', 'tp', 'pop_density', 'excess', 'cases',
              'NeutralvsLa_Nina', 'NeutralvsEl_Nino', 'El_NinovsLa_Nina', 
              'DANE', 'DANE_year', 'DANE_period']]
 
@@ -92,15 +93,94 @@ print(f"Columns in data_encoded: {data_encoded.columns.tolist()}")
 
 #%%
 
-# Function to estimate ATE and CATE for a specific treatment
+# Function to dynamically build causal graph (DOT format) for a given treatment
+def build_causal_graph(treatment_col):
+    """
+    Builds a DOT-format causal graph string, dynamically inserting the treatment column name.
+    Assumes variable names in data are mapped to DAG node names (e.g., SST12 -> S12).
+    """
+    graph_template = f"""
+    digraph G {{
+        // Nodes: Climate indices, treatment, outcome, mediators, confounders
+        S12; S3; S34; S4; SOI; ESOI; NATL; TROP; SATL;
+        {treatment_col}; excess;
+        sro; stl1; swvl1; t2m; tp;
+        MPI; pop_density;
+
+        // Relationships among climate indices
+        S12 -> S3; S12 -> S34; S12 -> S4; S12 -> SOI; S12 -> ESOI;
+        S12 -> NATL; S12 -> SATL; S12 -> TROP;
+
+        S3 -> S34; S3 -> S4; S3 -> SOI; S3 -> ESOI; S3 -> NATL;
+        S3 -> SATL; S3 -> TROP;
+
+        S34 -> S4; S34 -> SOI; S34 -> ESOI; S34 -> NATL; S34 -> SATL; S34 -> TROP;
+
+        S4 -> SOI; S4 -> ESOI; S4 -> NATL; S4 -> SATL; S4 -> TROP;
+
+        SOI -> ESOI; SOI -> NATL; SOI -> SATL; SOI -> TROP;
+
+        ESOI -> NATL; ESOI -> SATL; ESOI -> TROP;
+
+        NATL -> SATL; NATL -> TROP;
+
+        SATL -> TROP;
+
+        // Climate indices -> Treatment
+        S12 -> {treatment_col}; S3 -> {treatment_col}; S34 -> {treatment_col};
+        S4 -> {treatment_col}; SOI -> {treatment_col}; ESOI -> {treatment_col};
+        NATL -> {treatment_col}; SATL -> {treatment_col}; TROP -> {treatment_col};
+
+        // Climate indices -> Outcome
+        S12 -> excess; S3 -> excess; S34 -> excess; S4 -> excess;
+        SOI -> excess; ESOI -> excess; NATL -> excess; SATL -> excess; TROP -> excess;
+
+        // Climate indices -> Mediators (soil/rain/temp variables)
+        S12 -> sro; S12 -> stl1; S12 -> swvl1; S12 -> t2m; S12 -> tp;
+        S3 -> sro; S3 -> stl1; S3 -> swvl1; S3 -> t2m; S3 -> tp;
+        S34 -> sro; S34 -> stl1; S34 -> swvl1; S34 -> t2m; S34 -> tp;
+        S4 -> sro; S4 -> stl1; S4 -> swvl1; S4 -> t2m; S4 -> tp;
+        SOI -> sro; SOI -> stl1; SOI -> swvl1; SOI -> t2m; SOI -> tp;
+        ESOI -> sro; ESOI -> stl1; ESOI -> swvl1; ESOI -> t2m; ESOI -> tp;
+        NATL -> sro; NATL -> stl1; NATL -> swvl1; NATL -> t2m; NATL -> tp;
+        SATL -> sro; SATL -> stl1; SATL -> swvl1; SATL -> t2m; SATL -> tp;
+        TROP -> sro; TROP -> stl1; TROP -> swvl1; TROP -> t2m; TROP -> tp;
+
+        // Treatment -> Mediators
+        {treatment_col} -> sro; {treatment_col} -> stl1; {treatment_col} -> swvl1;
+        {treatment_col} -> t2m; {treatment_col} -> tp;
+
+        // Mediators interdependencies
+        sro -> stl1; sro -> swvl1; sro -> t2m; sro -> tp;
+        stl1 -> swvl1; stl1 -> t2m; stl1 -> tp;
+        swvl1 -> t2m; swvl1 -> tp;
+        t2m -> tp;
+
+        // Mediators -> MPI, pop_density, outcome
+        sro -> MPI; sro -> excess; sro -> pop_density;
+        stl1 -> MPI; stl1 -> excess; stl1 -> pop_density;
+        swvl1 -> MPI; swvl1 -> excess; swvl1 -> pop_density;
+        t2m -> MPI; t2m -> excess; t2m -> pop_density;
+        tp -> MPI; tp -> excess; tp -> pop_density;
+
+        // Final confounders / modifiers
+        MPI -> excess; pop_density -> excess;
+        MPI -> pop_density; 
+    }}
+    """
+    return graph_template
+
+
+# Function to estimate ATE and CATE for a specific treatment using DoWhy + EconML
 def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_index):
     print(f"\n=== Estimating effect for {treatment_name} ===")
     
     # Create specific dataset for this treatment (apply dropna here)
-    treatment_data = data[['excess', treatment_col, 'SST12', 'SST3', 'SST34', 'SST4', 'NATL', 'SATL', 'TROP', 'SOI', 'ESOI', 
-                          'DANE_normalized', 'DANE_year_normalized', 'DANE_period_normalized']].copy()
+    required_cols = ['excess', treatment_col, 'SST12', 'SST3', 'SST34', 'SST4', 'NATL', 'SATL', 'TROP', 'SOI', 'ESOI', 
+                     'DANE_normalized', 'DANE_year_normalized', 'DANE_period_normalized']
+    treatment_data = data[required_cols].copy()
     
-    # Remove only rows with NaN in the columns that this treatment needs
+    # Remove only rows with NaN in required columns
     treatment_data = treatment_data.dropna()
     print(f"Shape after dropna for {treatment_name}: {treatment_data.shape}")
     
@@ -108,7 +188,7 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
         print(f"No data for {treatment_name} after removing NaN!")
         return df_ATE, None, None
     
-    # Model
+    # Prepare arrays for EconML (still needed for CATE and internal fitting)
     Y = treatment_data['excess'].to_numpy()
     T = treatment_data[treatment_col].to_numpy()
     W = treatment_data[['SST12', 'SST3', 'SST34', 'SST4', 'NATL', 'SATL', 'TROP', 'SOI', 'ESOI']].to_numpy()
@@ -118,7 +198,9 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
     print(f"Dimensions - Y: {Y.shape}, T: {T.shape}, W: {W.shape}, X: {X.shape}")
 
     # Split data
-    X_train, X_test, T_train, T_test, Y_train, Y_test, W_train, W_test = train_test_split(X, T, Y, W, test_size=0.2, random_state=999, stratify=T)
+    X_train, X_test, T_train, T_test, Y_train, Y_test, W_train, W_test = train_test_split(
+        X, T, Y, W, test_size=0.2, random_state=999, stratify=T
+    )
 
     # Calculate propensity scores and overlap weights
     logit_model = LogisticRegressionCV(
@@ -134,53 +216,104 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
     overlap_weights_test = T_test * (1 - propensity_scores_test) + (1 - T_test) * propensity_scores_test
     overlap_weights_test = np.clip(overlap_weights_test, 0.01, 100)
 
-    # Estimation of the effect
-    estimate_model = SparseLinearDRLearner(
-        featurizer=PolynomialFeatures(degree=3, include_bias=False), 
-        max_iter=30000, 
-        cv=5, 
-        random_state=999)
+    propensity_scores_all = logit_model.predict_proba(W)[:, 1]
+    overlap_weights_all = T * (1 - propensity_scores_all) + (1 - T) * propensity_scores_all
+    overlap_weights_all = np.clip(overlap_weights_all, 0.01, 100)
 
-    estimate_model = estimate_model.dowhy
+    # ================================
+    # CAUSAL MODELING WITH DoWhy
+    # ================================
+    # Prepare data for DoWhy (must include all DAG variables)
+    data_for_dowhy = treatment_data.copy()
 
-    # Fit the model with corrected overlap weights
-    estimate_model.fit(
-        Y=Y_train, 
-        T=T_train, 
-        X=X_train, 
-        W=W_train, 
-        inference='auto', 
-        sample_weight=overlap_weights_train
+    
+    # Rename columns to match DAG node names
+    rename_map = {
+        'SST12': 'S12',
+        'SST3': 'S3',
+        'SST34': 'S34',
+        'SST4': 'S4',
+        'NATL': 'NATL',
+        'SATL': 'SATL',
+        'TROP': 'TROP',
+        'SOI': 'SOI',
+        'ESOI': 'ESOI',
+        'sro': 'sro',
+        'stl1': 'stl1',
+        'swvl1': 'swvl1',
+        't2m': 't2m',
+        'tp': 'tp',
+        'pop_density': 'pop_density',
+        'excess': 'excess'
+    }
+    data_for_dowhy = data_for_dowhy.rename(columns=rename_map)
+
+    # Build causal graph dynamically for this treatment
+    graph_str = build_causal_graph(treatment_col)
+
+    # Initialize CausalModel
+    model = CausalModel(
+        data=data_for_dowhy,
+        treatment=[treatment_col],
+        outcome=['excess'],
+        graph=graph_str
     )
 
-    # Calculate ATE
-    ate = estimate_model.ate(X_test)
-    ci = estimate_model.ate_interval(X_test)
+    # Identify causal effect
+    identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
+    print("Identified estimand (adjustment set):")
+    print(identified_estimand)
+
+    # Estimate effect using EconML within DoWhy framework
+    estimate_effect = model.estimate_effect(
+        identified_estimand,
+        effect_modifiers=['S12', 'DANE_normalized', 'DANE_year_normalized', 'DANE_period_normalized'],
+        method_name="backdoor.econml.dr.SparseLinearDRLearner",
+        confidence_intervals=True,
+        method_params={
+            "init_params": {
+                "featurizer": PolynomialFeatures(degree=3, include_bias=False),
+                "max_iter": 30000,
+                "cv": 5,
+                "random_state": 999
+            },
+            "fit_params": {
+                "sample_weight": overlap_weights_all  # Use full sample weights
+            }
+        }
+    )
+
+    # Extract ATE and confidence interval
+    ate = estimate_effect.value
+    ci_lower, ci_upper = estimate_effect.get_confidence_intervals()[0]
+    ci = (ci_lower, ci_upper)
     
     # Store in df_ATE
     df_ATE.at[row_index, 'ATE'] = ate
     df_ATE.at[row_index, '95% CI'] = ci
     
-    print(f"ATE {treatment_name}: {ate}")
-    print(f"95% CI: {ci}")
+    print(f"ATE {treatment_name}: {ate:.5f}")
+    print(f"95% CI: [{ci_lower:.5f}, {ci_upper:.5f}]")
 
-    # CATE SST12
-    # Extract SST12 for marginal effect
+    # ================================
+    # CATE: Conditional Effect on SST12 (S12)
+    # ================================
+    # Extract SST12 values (first column in X)
     SST12_train = X_train[:, 0]  
     SST12_test = X_test[:, 0]    
 
-    # Grid for SST12
+    # Create grid for SST12
     min_SST12 = SST12_train.min()
     max_SST12 = SST12_train.max()
     delta = (max_SST12 - min_SST12) / 100
     SST12_grid = np.arange(min_SST12, max_SST12 + delta - 0.001, delta)
 
-    # Means of other variables in X
+    # Compute mean values for other effect modifiers
     DANE_encoded_mean = np.mean(X_train[:, 1])   
     DANE_year_encoded_mean = np.mean(X_train[:, 2])
     DANE_period_encoded_mean = np.mean(X_train[:, 3])    
 
-    # Matrix of X
+    # Construct X_test_grid: [SST12, DANE_norm, DANE_year_norm, DANE_period_norm]
     X_test_grid = np.column_stack([
         SST12_grid,  
         np.full_like(SST12_grid, DANE_encoded_mean),     
@@ -188,11 +321,13 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
         np.full_like(SST12_grid, DANE_period_encoded_mean)  
     ])
 
-    # Conditional marginal effect
-    treatment_cont_marg = estimate_model.effect(X_test_grid)
-    hte_lower2_cons, hte_upper2_cons = estimate_model.effect_interval(X_test_grid)
+    # Access internal EconML estimator to compute CATE
+    econml_estimator = estimate_effect.estimator.estimator  # This is the actual SparseLinearDRLearner
 
-    # DataFrame for plotting CATE
+    treatment_cont_marg = econml_estimator.effect(X_test_grid)
+    hte_lower2_cons, hte_upper2_cons = econml_estimator.effect_interval(X_test_grid)
+
+    # Create DataFrame for plotting
     plot_data = pd.DataFrame({
         'X_test': SST12_grid,
         'treatment_cont_marg': treatment_cont_marg,
@@ -200,7 +335,7 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
         'hte_upper2_cons': hte_upper2_cons
     })
 
-    # Figure CATE
+    # Plot CATE
     cate_plot = (
         ggplot(plot_data)
         + aes(x='X_test', y='treatment_cont_marg')
@@ -214,28 +349,52 @@ def estimate_treatment_effect(data, treatment_col, treatment_name, df_ATE, row_i
                 axis_title_y=element_text(size=10))
     )
     
-    # Refute tests
+    # ================================
+    # REFUTATION TESTS (using DoWhy's API)
+    # ================================
     print(f"\n=== Refutation tests for {treatment_name} ===")
     try:
-        # Random common cause
-        random_test = estimate_model.refute_estimate(method_name="random_common_cause", random_state=123, num_simulations=50, sample_weight=overlap_weights_test)
-        print(f"Random common cause: {random_test}")
-        
-        # Bootstrap
-        bootstrap_test = estimate_model.refute_estimate(method_name="bootstrap_refuter", random_state=123, num_simulations=50, sample_weight=overlap_weights_test)
-        print(f"Bootstrap: {bootstrap_test}")
-        
-        # Dummy outcome
-        dummy_test = estimate_model.refute_estimate(method_name="dummy_outcome_refuter", random_state=123, num_simulations=50, sample_weight=overlap_weights_test)
-        print(f"Dummy outcome: {dummy_test[0]}")
-        
-        # Placebo
-        placebo_test = estimate_model.refute_estimate(method_name="placebo_treatment_refuter", placebo_type="permute", random_state=123, num_simulations=50, sample_weight=overlap_weights_test)
-        print(f"Placebo: {placebo_test}")
-    except Exception as e:
-        print(f"Error in refutation tests: {e}")
+        # Random Common Cause
+        random_test = model.refute_estimate(
+            estimated_effect=estimate_effect,
+            method_name="random_common_cause",
+            random_state=123,
+            num_simulations=50
+        )
+        print(f"Random common cause refutation: {random_test}")
 
-    return df_ATE, cate_plot, estimate_model
+        # Bootstrap
+        bootstrap_test = model.refute_estimate(
+            estimated_effect=estimate_effect,
+            method_name="bootstrap_refuter",
+            random_state=123,
+            num_simulations=50
+        )
+        print(f"Bootstrap refutation: {bootstrap_test}")
+
+        # Dummy Outcome
+        dummy_test = model.refute_estimate(
+            estimated_effect=estimate_effect,
+            method_name="dummy_outcome_refuter",
+            random_state=123,
+            num_simulations=50
+        )
+        print(f"Dummy outcome refutation: {dummy_test}")
+
+        # Placebo Treatment
+        placebo_test = model.refute_estimate(
+            estimated_effect=estimate_effect,
+            method_name="placebo_treatment_refuter",
+            placebo_type="permute",
+            random_state=123,
+            num_simulations=50
+        )
+        print(f"Placebo treatment refutation: {placebo_test}")
+
+    except Exception as e:
+        print(f"Error during refutation tests: {e}")
+
+    return df_ATE, cate_plot, estimate_effect
 
 #%%
 
